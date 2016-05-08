@@ -1,0 +1,98 @@
+---
+title: "Practical Machine Learning Assignment"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+
+The goal of this analysis is to determine if it is possible to predict how well a barbell lift was done based on multiple sensors data. The dataset used comes from the Human Activity Recognition project and can be accessed here : http://groupware.les.inf.puc-rio.br/har.
+
+This report is made for the Practical Machine Learning class on Coursera by the Johns Hopkins University. 
+
+
+```{r, echo=FALSE, results=FALSE, message=FALSE}
+library(caret)
+library(randomForest)
+library(doMC)
+registerDoMC(cores = 4)
+```
+
+```{r, cache=TRUE, echo=FALSE, results=FALSE}
+# Constants (prefixed with k in the Google recommendations)
+kDataDir <- "data"
+kTrainFile <- file.path(kDataDir, "pml-training.csv")
+kTestFile <- file.path(kDataDir, "pml-test.csv")
+
+# Download files in a "data" folder
+if (!dir.exists(kDataDir)) {
+  dir.create(kDataDir)
+}
+
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", kTrainFile)
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",  kTestFile)
+```
+
+## Load and split the training data
+The original training set will be split in two. 70% will be used to select the features and train the model. The rest will be used to estimate the out of sample error. This is necessary since the original test set does not have values for the "classe" variable that we want to predict. Therefore it is not possible to test the model's accuracy on this data.
+
+```{r}
+# Set the seed to have a reproducible report
+set.seed(1984)
+
+# Load the training and testing data
+dfTrainFull <- read.csv(kTrainFile, header = TRUE, na.strings=c("", "NA", "NULL"))
+dfTest <- read.csv(kTestFile, header = TRUE, na.strings=c("", "NA", "NULL"))
+
+# Slit data into training and testing sets
+inTrain <- createDataPartition(y=dfTrainFull$classe, times=1, p=0.7, list=FALSE)  
+dfTrain <- dfTrainFull[inTrain, ]
+dfTestFromTrain <- dfTrainFull[-inTrain, ]
+```
+
+## Feature selection
+First, the observation number (X), the user's name and the timestamps are removed to avoid using them in the model. It is possible the timestamp information could be useful for a prediction algorithm. But they would need to be reworked to be relative timesamps from the beginning of the lift. That would take a fair amount of variable pre-processing for an incertain result so we exclude them completely for now.
+
+```{r}
+dfTrainRelevantVar <- dfTrain[ , -c(1:5)]
+```
+
+A summary of the data show that the variables that have missing values often miss values for the majority of the observations. In that case it would be meaningless to input missing values because there are too many. To reduce the number of variables to consider we will only keep the variables with no missing values.
+
+```{r}
+dfTrainNoNa <- dfTrainRelevantVar[ , colSums(is.na(dfTrainRelevantVar)) == 0]
+originalK <- dim(dfTrain)
+k <- dim(dfTrainNoNa)
+```
+Only `r k[2]` variables of the original `r originalK[2]` are left.
+
+## Random forest training and evaluation
+On this type of structured data with no temporal element, most machine learning algorithms would work well. We choose a random forest because it is one of the most consistently accurate ones and is widely used.
+
+The model is trained on 70% of the original training set. K-fold cross-validation is used with 4 folds.
+
+```{r, cache=TRUE}
+# trainControl sets the computational methods used in the training to reduce the training time
+tControl <- trainControl(allowParallel=T, method="cv", number=4)
+modelRf <- train(classe ~ ., data=dfTrainNoNa, model="rf", trControl=tControl)
+```
+ 
+
+The model's accuracy is evaluated against the remaining 30% of the original training set
+```{r}
+# Test the model on the testing data created from the original training set
+pred <- predict(modelRf, newdata=dfTestFromTrain )
+confMatrix <- confusionMatrix(dfTestFromTrain$classe, pred)
+accuracy <- confMatrix$overall[1]
+confMatrix$table
+```
+
+
+## Conclusion
+The accuracy of the model is `r format(round(accuracy*100, 2), digits=4)`% on previously unseen data. Therefore, the out of sample error for the accuracy can be estimated to be `r format(round((1-accuracy)*100, 2), digits=4)`%.
+
+This model is very likely to accurately predict the 20 unknown classes for the course's final quiz.
+
